@@ -1,5 +1,6 @@
 Para descargar el ejecutable de Espectral Free, entra al enlace que dejamos más abajo.
-Link: https://www.mediafire.com/file/ifxq5d2lof4f1ye/Espectral_Free.rar/file
+Link:
+https://www.mediafire.com/file/ifxq5d2lof4f1ye/Espectral_Free.rar/file
 El archivo pesa unos 75 MB, así que supera el límite de 25 MB de GitHub y por eso está alojado en otro sitio.
 
 Nota: algunos antivirus o el navegador pueden mostrar una advertencia al detectar un archivo con extensión '.exe' .
