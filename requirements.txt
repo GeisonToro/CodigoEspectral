@@ -1,0 +1,6 @@
+# Espectral Free – dependencias de ejecución (v1.0)
+numpy
+scipy
+numexpr
+matplotlib
+# ttkthemes  # ← El uso de esta librería se optó por no hacerlo por temas de rendimiento, si el usuario desea una interfaz más personalizada debe de descomentarla e implementarla en la interfaz.
