@@ -6,95 +6,97 @@ import os
 import math
 import numpy as np
 import re
-
+from scipy.signal import savgol_filter
+from scipy.ndimage import gaussian_filter1d
+import numexpr as ne
+#from ttkthemes import ThemedTk
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
 # -------------------------------------------------------------------------
-# FUNCIONES DE ÍNDICES DE VEGETACIÓN
+# COMPILAR UNA ÚNICA VEZ EL PATRÓN DE TOKENS
 # -------------------------------------------------------------------------
+_PAT_TOKEN = re.compile(r"[0-9]*\.?[0-9]+|[a-d]|[()\+\-\*/\^]|[^\s]")
+
+# -------------------------------------------------------------------------
+# FUNCIONES DE ÍNDICES DE VEGETACIÓN (SIN CAMBIOS)
+# -------------------------------------------------------------------------
+
 def calcular_savi(nir, rojo, L=0.5):
-    return (1 + L) * (nir - rojo) / (nir + rojo + L)
+    return (1 + L) * (((nir)/100) - ((rojo)/100)) / (((nir)/100) + ((rojo)/100) + L)
 
 def calcular_ndvi(nir, rojo):
     return (nir - rojo) / (nir + rojo)
 
 def calcular_evi(nir, rojo, azul, L=1, C1=6, C2=7.5, G=2.5):
-    return G * (nir - rojo) / (nir + C1*rojo - C2*azul + L)
+    return G * (((nir)/100) - ((rojo)/100)) / (((nir)/100) + C1*((rojo)/100) - C2*((azul)/100) + L)
 
 def calcular_nbr(nir, swir2):
     return (nir - swir2) / (nir + swir2)
 
 def calcular_gli(verde, rojo, azul):
-    return (2*verde - rojo - azul) / (2*verde + rojo + azul)
+    return (2*((verde)/100) - ((rojo)/100) - ((azul)/100)) / (2*((verde)/100) + ((rojo)/100) + ((azul)/100))
 
 def calcular_gcl(nir, verde):
-    return (nir / verde) - 1
+    return (((nir)/100) / ((verde)/100)) - 1
 
 def calcular_sipi(nir, azul, rojo):
-    return (nir - azul) / (nir - rojo)
+    return (((nir)/100) - ((azul)/100)) / (((nir)/100) - ((rojo)/100))
 
 def calcular_mcari(rojo, verde, nir):
-    return ((nir - rojo) - 0.2*(nir - verde)) * (nir / rojo)
+    return ((((nir)/100) - ((rojo)/100)) - 0.2*(((nir)/100) - ((verde)/100))) * (((nir)/100) / ((rojo)/100))
 
 # -------------------------------------------------------------------------
-# FUNCIONES AUXILIARES: OBTENER REFLECTANCIA Y EVALUAR ÍNDICE PERSONALIZADO
+# FUNCIONES AUXILIARES
 # -------------------------------------------------------------------------
+
 def obtener_reflectancia_en_onda(longitudes, reflectancias, onda_objetivo, tolerancia=2.0):
     if len(longitudes) == 0:
         return None
-    indice_cercano = np.argmin(np.abs(longitudes - onda_objetivo))
-    distancia = abs(longitudes[indice_cercano] - onda_objetivo)
-    return reflectancias[indice_cercano] if distancia <= tolerancia else None
+    idx = np.argmin(np.abs(longitudes - onda_objetivo))
+    return reflectancias[idx] if abs(longitudes[idx] - onda_objetivo) <= tolerancia else None
 
-def calcular_indice_personalizado(formula, constantes, longitudes, reflectancias):
+
+def calcular_indice_personalizado(formula: str, constantes: dict, longitudes: np.ndarray, reflectancias: np.ndarray):
+    """Evalúa un índice de vegetación personalizado"""
+    # Normalizar exponentes
     expr = formula.replace("^", "**")
-    patron_tokens = r"[0-9]*\.?[0-9]+|[a-d]|[\(\)\+\-\*\/\^]|[^\s]"
-    tokens = re.findall(patron_tokens, expr)
 
-    nueva_lista_tokens = []
-    for t in tokens:
-        # Intentar parsear como número (posible longitud de onda)
-        try:
-            valor_onda = float(t)
-            indice_cercano = np.argmin(np.abs(longitudes - valor_onda))
-            if indice_cercano < 0 or indice_cercano >= len(longitudes):
-                return None
-            valor_reflectancia = reflectancias[indice_cercano]
-            nueva_lista_tokens.append(f"({valor_reflectancia})")
-            continue
-        except ValueError:
-            pass
+    # Tokenizar con el patrón
+    tokens = _PAT_TOKEN.findall(expr)
 
-        # Si es una de las constantes (a,b,c,d)
-        if t in constantes and constantes[t] is not None:
-            nueva_lista_tokens.append(str(constantes[t]))
-            continue
+    # Identificar tokens numéricos en bloque
+    mascaras_num = np.fromiter((t.replace('.', '', 1).isdigit() for t in tokens), bool)
+    if mascaras_num.any():
+        # Convertir todos los tokens numéricos de una vez
+        valores = np.array(tokens, dtype=object)
+        nums = valores[mascaras_num].astype(float)
+        # Para cada longitud solicitada buscamos el índice más cercano (vectorizado)
+        idxs = np.abs(nums[:, None] - longitudes).argmin(axis=1)
+        refls = reflectancias[idxs].astype(str)
+        valores[mascaras_num] = refls
+        tokens = valores.tolist()
 
-        nueva_lista_tokens.append(t)
+    # Sustituir constantes a,b,c,d
+    tokens = [str(constantes.get(t, t)) for t in tokens]
 
-    expresion_final = "".join(nueva_lista_tokens)
+    expresion_final = "".join(tokens)
     try:
-        resultado = eval(expresion_final, {"__builtins__": {}}, {})
-        if isinstance(resultado, (int, float, np.floating)):
-            return float(resultado)
-        else:
-            return None
-    except:
+        res = ne.evaluate(expresion_final)
+        return float(res) if isinstance(res, (int, float, np.floating)) else None
+    except ne.NumExprError:
         return None
+    except Exception as e:
+        messagebox.showerror("Error", f"Expresión personalizada inválida: {e}")
+        return None
+
 
 # -------------------------------------------------------------------------
 # VENTANA PARA ÍNDICE PERSONALIZADO (VentanaIndicePersonalizado)
 # -------------------------------------------------------------------------
 class VentanaIndicePersonalizado(tk.Toplevel):
-    """
-    Ventana para añadir un índice de vegetación personalizado:
-    - Nombre del índice
-    - Fórmula
-    - Constantes (a,b,c,d)
-    """
     def __init__(self, padre, al_añadir_callback):
         super().__init__(padre)
         self.title("Añadir Índice de Vegetación")
@@ -185,20 +187,12 @@ class VentanaIndicePersonalizado(tk.Toplevel):
         self.destroy()
 
 # -------------------------------------------------------------------------
-# CLASE VENTANA PRINCIPAL (VentanaPrincipal)
+# CLASE VENTANA PRINCIPAL (ESPECTRAL FREE)
 # -------------------------------------------------------------------------
 class VentanaPrincipal:
-    """
-    Ventana principal de la aplicación:
-      - Carga y eliminación de archivos TRM
-      - Tabla de lecturas y de estadísticas
-      - Gráfico principal (firma espectral)
-      - Exportar datos y estadísticas
-      - Botón para abrir la Ventana de Procesamiento
-    """
     def __init__(self, raiz):
         self.raiz = raiz
-        self.raiz.title("Aplicación Espectral")
+        self.raiz.title("ESPECTRAL FREE")
 
         self.archivos_datos = {}       # Diccionario: { ruta_archivo: {...} }
         self.archivos_en_grafico = []  # Lista de rutas "añadidas al gráfico"
@@ -329,7 +323,7 @@ class VentanaPrincipal:
         self.inicializar_tablas()
 
     # -------------------------------------------------------
-    # Inicializar tablas de lecturas y estadísticas
+    # Tablas de lecturas y estadísticas
     # -------------------------------------------------------
     def inicializar_tablas(self):
         self.tabla_lecturas["columns"] = ("Longitud de Onda",)
@@ -650,16 +644,9 @@ class VentanaPrincipal:
         vp.mainloop()
 
 # -------------------------------------------------------------------------
-# VENTANA DE PROCESAMIENTO (VentanaProcesamiento)
+# VENTANA DE PROCESAMIENTO (Ventana Procesamiento)
 # -------------------------------------------------------------------------
 class VentanaProcesamiento(tk.Toplevel):
-    """
-    Ventana secundaria que maneja:
-      - Filtros + tabla y gráfico
-      - Derivadas
-      - Índices de Vegetación
-      - Análisis
-    """
     def __init__(self, ventana_principal):
         super().__init__(ventana_principal.raiz)
         self.ventana_principal = ventana_principal
@@ -776,7 +763,7 @@ class VentanaProcesamiento(tk.Toplevel):
         marco_herramientas_filtro.pack(side=tk.BOTTOM, pady=10)
         self.barra_filtro = NavigationToolbar2Tk(self.lienzo_filtro, marco_herramientas_filtro)
         self.barra_filtro.update()
-
+        
         # Notebook: Derivadas, Índices, Análisis
         self.notebook = ttk.Notebook(self.marco_secundario, style="CustomNotebook.TNotebook")
         self.notebook.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -968,7 +955,7 @@ class VentanaProcesamiento(tk.Toplevel):
         return np.array(filtrada)
 
     def savitzky_golay(self, datos, window=5, poly=2):
-        return datos
+        return savgol_filter(datos, window, poly)
 
     def mediana_filter(self, datos, window=3):
         filtrada=[]
@@ -982,7 +969,7 @@ class VentanaProcesamiento(tk.Toplevel):
         return np.array(filtrada)
 
     def gaussiano_filter(self, datos, sigma=1):
-        return datos
+        return gaussian_filter1d(datos, sigma)
 
     def exportar_datos_filtrados(self):
         if len(self.tabla_filtrada["columns"])<=1:
@@ -1417,6 +1404,7 @@ class VentanaProcesamiento(tk.Toplevel):
         """
         Retorna mensajes interpretativos simples para cada índice,
         basándose en umbrales básicos.
+        Esto puede personalizarse segun cada caso particular de estudio.
         """
         msgs=[]
         if nombre_indice=="NDVI":
