@@ -1,4 +1,4 @@
-# Espectral Free 🌈📊
+# Espectral Free 📊
 Es una aplicación de escritorio en Python para visualizar, filtrar y analizar firmas espectrales con la opción de no escribir código.
 
 ## Características principales
